@@ -1,4 +1,4 @@
-name: Build firmware and publish site
+name: Build firmware
 
 on:
   push:
@@ -7,40 +7,11 @@ on:
       - "sketches/**"
       - "ino2bin.py"
       - ".github/workflows/build.yml"
-      - "scripts/**"
-  workflow_dispatch:
-    inputs:
-      project_name:
-        description: Optional project label for the uploaded sketch
-        required: false
-        default: uploaded
-      board:
-        description: Board FQBN to compile for
-        required: false
-        default: esp8266:esp8266:nodemcuv2
-      sketch_name:
-        description: Name of the uploaded sketch, without .ino
-        required: false
-        default: uploaded
-      sketch_content_b64:
-        description: Base64-encoded content of the uploaded .ino file
-        required: false
-        default: ""
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  workflow_dispatch: {}   # lets you trigger a build manually from the Actions tab
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      built-count: ${{ steps.compile.outputs.count }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,79 +38,35 @@ jobs:
           arduino-cli core install esp32:esp32
 
       - name: Install common libraries
+        # Add any other libraries your sketches need here.
         run: |
           arduino-cli lib install "Blynk"
           arduino-cli lib install "DHT sensor library"
 
-      - name: Compile sketches or uploaded firmware
-        id: compile
-        shell: bash
+      - name: Compile every sketch
         run: |
-          set -euo pipefail
-          mkdir -p build docs/downloads
-          count=0
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.sketch_content_b64 }}" ]]; then
-            project_name="${{ github.event.inputs.project_name }}"
-            sketch_name="${{ github.event.inputs.sketch_name }}"
-            board="${{ github.event.inputs.board }}"
-            sanitized_name="${sketch_name%%.*}"
-            if [[ -z "$sanitized_name" ]]; then
-              sanitized_name="uploaded"
-            fi
-            sketch_dir="build/upload_${sanitized_name}"
-            mkdir -p "$sketch_dir"
-            echo "${{ github.event.inputs.sketch_content_b64 }}" | base64 --decode > "$sketch_dir/${sanitized_name}.ino"
-
-            echo "::group::Compiling uploaded sketch $sanitized_name for $board"
-            if python3 ino2bin.py --sketch "$sketch_dir" --board "$board" --output-dir "$sketch_dir/out"; then
-              bin_file=$(find "$sketch_dir/out" -name "*.bin" | head -n1)
-              if [ -n "$bin_file" ]; then
-                cp "$bin_file" "docs/downloads/${project_name}_${sanitized_name}.bin"
-                count=$((count + 1))
-              fi
-            else
-              echo "::warning::Uploaded sketch build failed for $sanitized_name."
-            fi
-            echo "::endgroup::"
-          else
-            for sketch_dir in sketches/*/; do
-              name=$(basename "$sketch_dir")
-              for board in esp8266:esp8266:nodemcuv2 esp32:esp32:esp32; do
-                board_label=$(echo "$board" | cut -d: -f1)
-                out="build/${name}_${board_label}"
-                echo "::group::Compiling $name for $board_label"
-                if python3 ino2bin.py --sketch "$sketch_dir" --board "$board" --output-dir "$out"; then
-                  bin_file=$(find "$out" -name "*.bin" | head -n1)
-                  if [ -n "$bin_file" ]; then
-                    cp "$bin_file" "docs/downloads/${name}_${board_label}.bin"
-                    count=$((count + 1))
-                  fi
-                else
-                  echo "::warning::Skipping $name for $board_label — see log above for the error."
+          mkdir -p build artifacts
+          for sketch_dir in sketches/*/; do
+            name=$(basename "$sketch_dir")
+            for board in esp8266:esp8266:nodemcuv2 esp32:esp32:esp32; do
+              board_label=$(echo "$board" | cut -d: -f1)
+              out="build/${name}_${board_label}"
+              echo "::group::Compiling $name for $board_label"
+              if python3 ino2bin.py --sketch "$sketch_dir" --board "$board" --output-dir "$out"; then
+                bin_file=$(find "$out" -name "*.bin" | head -n1)
+                if [ -n "$bin_file" ]; then
+                  cp "$bin_file" "artifacts/${name}_${board_label}.bin"
                 fi
-                echo "::endgroup::"
-              done
+              else
+                echo "::warning::Skipping $name for $board_label — see log above for the error."
+              fi
+              echo "::endgroup::"
             done
-          fi
+          done
 
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-
-      - name: Generate download page
-        run: python3 scripts/generate_index.py
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Upload compiled .bin files
+        uses: actions/upload-artifact@v4
         with:
-          path: docs
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          name: firmware-binaries
+          path: artifacts/*.bin
+          if-no-files-found: error
