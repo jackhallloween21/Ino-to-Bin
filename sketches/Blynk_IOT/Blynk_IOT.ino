@@ -6,148 +6,103 @@
 #include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
 #include <DHT.h>
-
-// #include  <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
-// Your WiFi credentials.
-// Set password to "" for open networks.
+
+// Your WiFi credentials
 char ssid[] = "TonyStarkFiber_2.4";
 char pass[] = "Aditya007";
 char auth[] = BLYNK_AUTH_TOKEN;
 
 #define BLYNK_PRINT Serial
 #define DHTTYPE DHT11
-#define DHTPIN D4
-#define relayPin D5
-const int redPin = D3;
-const int greenPin = D1;
-const int bluePin = D2;
+#define DHTPIN D4     // GPIO2
+#define relayPin D5   // GPIO14
+const int redPin = D3;   // GPIO0
+const int greenPin = D1; // GPIO5
+const int bluePin = D2;  // GPIO4
 
-// Define the PWM frequency and resolution
-const int pwmFrequency = 1000;
-const int pwmResolution = 8;
+const int buttonPin = D6; // Pin connected to the push button (GPIO12)
+int sensor_pin = A0;      // Soil Sensor input at Analog PIN A0
 
-
-const int buttonPin = D6; // Pin connected to the push button
-int sensor_pin = A0; // Soil Sensor input at Analog PIN A0
-
-bool relayState = LOW;    // Variable to store the current state of the relay (false = OFF, true = ON)
-bool lastButtonState = HIGH; // Variable to store the last state of the button
-unsigned long lastDebounceTime = 0; // Variable to store the last debounce time
-unsigned long debounceDelay = 50; // Debounce time in milliseconds
+bool relayState = LOW;        // Variable to store current state of the relay
+unsigned long lastDebounceTime = 0; 
+unsigned long debounceDelay = 50; 
 
 BlynkTimer timer;
 DHT dht(DHTPIN, DHTTYPE);
 
 // CONFIRMED common-anode LEDs: pin LOW = ON, pin HIGH = OFF.
-// This inverts so the value coming from Blynk behaves intuitively:
-// 0 = off, 255 = full brightness.
 void writeRGBChannel(int pin, int brightness) {
   brightness = constrain(brightness, 0, 255);
   analogWrite(pin, 255 - brightness);
 }
 
 void setup() {
-
   Serial.begin(9600);
-  dht.begin(); // Initialize the DHT sensor here
-  Blynk.config(auth);
+  dht.begin(); 
+  
+  // Blynk.begin handles Wi-Fi connection and Blynk connection blocking-style
   Blynk.begin(auth, ssid, pass);
+
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(sensor_pin, INPUT);
 
-  // Initialize PWM for each pin
-  analogWriteRange(255); // Set the PWM range for ESP8266
+  // Initialize PWM for ESP8266
+  analogWriteRange(255); 
   pinMode(redPin, OUTPUT);
   pinMode(greenPin, OUTPUT);
   pinMode(bluePin, OUTPUT);
+  pinMode(relayPin, OUTPUT);
 
-  pinMode(D1, OUTPUT); // Redundant, already defined as greenPin
-  pinMode(D2, OUTPUT); // Redundant, already defined as bluePin
-  pinMode(D3, OUTPUT); // Redundant, already defined as redPin
-  pinMode(D5, OUTPUT);
   digitalWrite(greenPin, HIGH); // Common anode: HIGH turns it OFF
-  digitalWrite(bluePin, HIGH);  // Common anode: HIGH turns it OFF
-  digitalWrite(redPin, HIGH);   // Common anode: HIGH turns it OFF
-  digitalWrite(D5, LOW); // relay - LOW might turn it ON depending on your relay module
+  digitalWrite(bluePin, HIGH);  
+  digitalWrite(redPin, HIGH);    
+  digitalWrite(relayPin, LOW);  // Relay OFF initially
+
   timer.setInterval(1000L, sendSensor);
-  // timer.setInterval(1000L, sendUptime);
-
-
+  timer.setInterval(1000L, sendUptime);
 }
 
-// This function is called every time the Virtual Pin 0 state changes
-
-/* BLYNK_WRITE(V0) //blue
-{
-  // Set incoming value from pin V0 to a variable
-  int value = param.asInt();
-  // Update state
-value ? digitalWrite(D2, LOW): digitalWrite(D2, HIGH);
-}
-BLYNK_WRITE(V1) //green
-{
-  // Set incoming value from pin V0 to a variable
-  int value = param.asInt();
-  // Update state
-value ? digitalWrite(D1, LOW): digitalWrite(D1, HIGH);
-}
-BLYNK_WRITE(V2) //red
-{
-  // Set incoming value from pin V0 to a variable
-  int value = param.asInt();
-  // Update state
-value ? digitalWrite(D3, LOW): digitalWrite(D3, HIGH);
-}*/
-
-BLYNK_WRITE(V5)
-{
+// Blynk Virtual Pin handler for Relay switch from app
+BLYNK_WRITE(V5) {
   int state = param.asInt();
- if (state == 1) {
-   digitalWrite(relayPin, HIGH); // Turn relay on
- } else {
-   digitalWrite(relayPin, LOW); // Turn relay off
- }
+  relayState = state;
+  digitalWrite(relayPin, relayState ? HIGH : LOW);
 }
 
-
+// RGB LED Virtual Pins
 BLYNK_WRITE(V2) { // Red
   int redValue = param.asInt();
-  Serial.print("V2 (red) received: "); Serial.println(redValue);
-  writeRGBChannel(redPin, redValue); // 0 = off, 255 = full brightness
+  writeRGBChannel(redPin, redValue); 
 }
 
 BLYNK_WRITE(V1) { // Green
   int greenValue = param.asInt();
-  Serial.print("V1 (green) received: "); Serial.println(greenValue);
-  writeRGBChannel(greenPin, greenValue); // 0 = off, 255 = full brightness
+  writeRGBChannel(greenPin, greenValue); 
 }
 
 BLYNK_WRITE(V0) { // Blue
   int blueValue = param.asInt();
-  Serial.print("V0 (blue) received: "); Serial.println(blueValue);
-  writeRGBChannel(bluePin, blueValue); // 0 = off, 255 = full brightness
+  writeRGBChannel(bluePin, blueValue); 
 }
 
-void sendSensor()
-{
+void sendSensor() {
   float h = dht.readHumidity();
-  float t = dht.readTemperature(); // or dht.readTemperature(true) for Fahrenheit
-    int out_val= analogRead(sensor_pin);
-    out_val = map(out_val,550,10,0,100);
+  float t = dht.readTemperature(); 
+  int out_val = analogRead(sensor_pin);
+  out_val = map(out_val, 550, 10, 0, 100); // Adjust calibration mapping values if needed
+  
   if (isnan(h) || isnan(t)) {
     Serial.println("Failed to read from DHT sensor!");
     return;
   }
 
-  Serial.println(h);
-  Serial.println(t);
-  Blynk.virtualWrite(V8, out_val); //moisture
-  Blynk.virtualWrite(V6, h);  //V4 is for Humidity
-  Blynk.virtualWrite(V3, t);  //V3 is for Temperature
+  Blynk.virtualWrite(V8, out_val); // Soil moisture
+  Blynk.virtualWrite(V6, h);       // Humidity
+  Blynk.virtualWrite(V3, t);       // Temperature
 }
-/* void sendUptime()
-{
+
+void sendUptime() {
   unsigned long millisec = millis();
   unsigned long sec = millisec / 1000;
   unsigned long min = sec / 60;
@@ -158,22 +113,24 @@ void sendSensor()
   hr = hr % 24;
 
   String uptimeString = String(hr) + "h " + String(min) + "m " + String(sec) + "s";
+  Blynk.virtualWrite(V4, uptimeString); 
+}  
 
-  Blynk.virtualWrite(V7, uptimeString); // Send uptime to Blynk app
-} */
-void swtch()
-{
-    int reading = digitalRead(buttonPin); // Read the state of the button
- if (reading == LOW) {  // If the button is pressed (INPUT_PULLUP means LOW when pressed)
-    relayState = !relayState; // Toggle the relay state
-        digitalWrite(relayPin, relayState);  // Set the relay to the new state
- // Check if the button state has changed (i.e., a press is detected)
-      Serial.println(relayState ? "Relay ON" : "Relay OFF"); // Print the relay state
-      delay(500); // Debounce delay
-    }
- }
+void swtch() {
+  int reading = digitalRead(buttonPin); 
+  if (reading == LOW && (millis() - lastDebounceTime) > debounceDelay) {  
+    lastDebounceTime = millis();
+    relayState = !relayState; // Toggle state
+    digitalWrite(relayPin, relayState);  
+    Serial.println(relayState ? "Relay ON" : "Relay OFF"); 
+    
+    // Sync state back to Blynk app virtual pin V5 so the toggle button updates visually
+    Blynk.virtualWrite(V5, relayState);
+  }
+}
+
 void loop() {
-    Blynk.run();
-    timer.run();
-    //swtch();
+  Blynk.run();
+  timer.run();
+  swtch(); // Enabled physical button check
 }
